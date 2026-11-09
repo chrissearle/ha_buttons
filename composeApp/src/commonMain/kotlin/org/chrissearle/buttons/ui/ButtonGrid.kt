@@ -65,8 +65,8 @@ private fun ButtonTile(button: ButtonUiState, onClick: () -> Unit) {
     val (targetContainer, targetContent) = when {
         button.flash == Flash.Success -> SuccessColor to Color.White
         button.flash == Flash.Failure -> FailureColor to Color.White
-        button.isAction -> colors.secondaryContainer to colors.onSecondaryContainer
-        button.isOn -> OnColor to OnContentColor
+        button.hasState && button.isOn -> OnColor to OnContentColor
+        !button.hasState -> colors.secondaryContainer to colors.onSecondaryContainer
         else -> colors.surfaceVariant to colors.onSurfaceVariant
     }
     val container by animateColorAsState(targetContainer)

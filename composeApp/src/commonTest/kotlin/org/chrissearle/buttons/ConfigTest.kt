@@ -65,17 +65,30 @@ class ConfigTest {
     }
 
     @Test
-    fun rejectsButtonWithBothEntityAndAction() {
+    fun acceptsActionWithStateEntity() {
+        val config = parseConfig(
+            """
+            homeassistant: { url: "http://ha:8123", token: t }
+            buttons:
+              - { name: Meeting, entity: input_boolean.meeting_state, action: script.meeting_change }
+            """.trimIndent(),
+        )
+        assertEquals("input_boolean.meeting_state", config.buttons[0].entity)
+        assertEquals("script.meeting_change", config.buttons[0].action)
+    }
+
+    @Test
+    fun rejectsDataOnToggleOnlyButton() {
         val e = assertFailsWith<ConfigException> {
             parseConfig(
                 """
                 homeassistant: { url: "http://ha:8123", token: t }
                 buttons:
-                  - { name: A, entity: light.a, action: script.turn_on }
+                  - { name: A, entity: light.a, data: { brightness: 10 } }
                 """.trimIndent(),
             )
         }
-        assertTrue(e.message!!.contains("not both"), e.message)
+        assertTrue(e.message!!.contains("only apply to action"), e.message)
     }
 
     @Test

@@ -27,6 +27,12 @@ buttons:
       entity_id: script.movie_time
     icon: movie
 
+  # Action + entity: click runs the action, tile shows the entity's on/off state
+  - name: Meeting
+    entity: input_boolean.meeting_state
+    action: script.meeting_change
+    icon: person
+
   - name: Ping phone
     action: notify.mobile_app_my_phone
     data:

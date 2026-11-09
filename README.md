@@ -75,8 +75,23 @@ buttons:
     icon: movie
 ```
 
-Each button has either `entity` (toggle + live state) or `action` (fire-and-forget; the tile flashes
-green on success, red on failure). Errors are shown in the status bar.
+Each button needs `entity`, `action`, or both:
+
+| Config              | Tile shows               | Click does                                   |
+|---------------------|--------------------------|----------------------------------------------|
+| `entity` only       | on/off state (amber/dim) | toggles the entity                           |
+| `action` only       | neutral                  | calls the action; flashes green / red        |
+| `entity` + `action` | the entity's on/off state| calls the action; flashes green / red        |
+
+The last form is for e.g. a script that changes an `input_boolean` (plus other things):
+
+```yaml
+  - name: Meeting
+    entity: input_boolean.meeting_state   # state shown
+    action: script.meeting_change         # run on click
+```
+
+Errors are shown in the status bar.
 
 `icon` is optional; when omitted a default is chosen from the entity/action domain. Available names:
 ac, air, alarm, bed, bell, bolt, camera, code, coffee, door, fan, fire, garage, heat, home, kitchen,

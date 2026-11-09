@@ -21,9 +21,10 @@ data class ButtonUiState(
     val index: Int,
     val name: String,
     val icon: String?,
-    /** Entity id for entity buttons, action name for action buttons. */
+    /** Entity id if set, else the action name - used to pick a default icon. */
     val target: String,
-    val isAction: Boolean,
+    /** True when the tile shows an entity's on/off state. */
+    val hasState: Boolean,
     val isOn: Boolean,
     val available: Boolean,
     val flash: Flash?,
@@ -60,8 +61,8 @@ class ButtonsViewModel(
         val button = buttons[index]
         scope.launch {
             val result = when {
-                button.entity != null -> client.toggle(button.entity)
                 button.action != null -> client.callAction(button.action, button.data, button.target)
+                button.entity != null -> client.toggle(button.entity)
                 else -> return@launch
             }
 
@@ -94,9 +95,9 @@ class ButtonsViewModel(
             name = name,
             icon = icon,
             target = entity ?: action.orEmpty(),
-            isAction = action != null,
+            hasState = entity != null,
             isOn = state?.isOn == true,
-            available = connected && (action != null || state?.isAvailable == true),
+            available = connected && (entity == null || state?.isAvailable == true),
             flash = flash,
         )
     }

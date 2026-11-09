@@ -69,9 +69,12 @@ data class UiConfig(
 data class ButtonConfig(
     val name: String,
     val icon: String? = null,
-    /** Entity to toggle, e.g. `light.desk` or `input_boolean.guest_mode`. */
+    /**
+     * Entity whose on/off state the tile shows, e.g. `light.desk` or `input_boolean.guest_mode`.
+     * Without [action], clicking toggles it.
+     */
     val entity: String? = null,
-    /** Action to call, e.g. `script.turn_on`. */
+    /** Action to call on click, e.g. `script.turn_on`. Replaces the toggle when [entity] is also set. */
     val action: String? = null,
     /** Optional action data (service_data). */
     val data: JsonObject? = null,
@@ -122,14 +125,14 @@ private fun validate(config: AppConfig) {
 
     config.buttons.forEachIndexed { i, b ->
         val label = "buttons[$i] (${b.name})"
-        when {
-            b.entity != null && b.action != null -> errors += "$label: set either 'entity' or 'action', not both"
-            b.entity == null && b.action == null -> errors += "$label: needs 'entity' or 'action'"
-            b.entity != null && !b.entity.contains('.') -> errors += "$label: entity '${b.entity}' should look like domain.object_id"
-            b.action != null && b.action.split('.').let { it.size != 2 || it.any(String::isBlank) } ->
-                errors += "$label: action '${b.action}' should look like domain.service"
+        if (b.entity == null && b.action == null) errors += "$label: needs 'entity' and/or 'action'"
+        if (b.entity != null && !b.entity.contains('.')) {
+            errors += "$label: entity '${b.entity}' should look like domain.object_id"
         }
-        if (b.entity != null && (b.data != null || b.target != null)) {
+        if (b.action != null && b.action.split('.').let { it.size != 2 || it.any(String::isBlank) }) {
+            errors += "$label: action '${b.action}' should look like domain.service"
+        }
+        if (b.action == null && (b.data != null || b.target != null)) {
             errors += "$label: 'data' and 'target' only apply to action buttons"
         }
     }
