@@ -64,8 +64,19 @@ class MessagesTest {
 
     @Test
     fun parsesCoalescedArray() {
-        val msgs = parseIncoming("""[{"type":"auth_ok"},{"type":"pong","id":3}]""")
-        assertEquals(listOf(Incoming.AuthOk, Incoming.Other("pong")), msgs)
+        val msgs = parseIncoming("""[{"type":"auth_ok"},{"type":"other_thing","id":3}]""")
+        assertEquals(listOf(Incoming.AuthOk, Incoming.Other("other_thing")), msgs)
+    }
+
+    @Test
+    fun parsesPongAsSuccessfulResult() {
+        val msg = parseIncoming("""{"type":"pong","id":7}""").single()
+        assertEquals(Incoming.Result(id = 7, success = true, result = null, errorMessage = null), msg)
+    }
+
+    @Test
+    fun buildsPing() {
+        assertEquals("""{"id":4,"type":"ping"}""", Outgoing.ping(4).toString())
     }
 
     @Test

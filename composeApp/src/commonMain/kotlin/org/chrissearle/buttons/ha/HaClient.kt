@@ -8,8 +8,12 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,11 +23,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.chrissearle.buttons.config.HaConfig
+import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+import kotlin.time.TimeSource
 
 sealed interface ConnectionState {
     data object Connecting : ConnectionState
@@ -43,6 +52,10 @@ private class AuthRejected(message: String) : Exception(message)
  *
  * Keeps a live map of the states of [entityIds] and lets callers toggle entities
  * and call actions. Reconnects automatically with exponential backoff.
+ *
+ * A heartbeat (HA `ping`) detects dead connections - e.g. a socket left half-open
+ * after the machine slept - and a wall-clock jump (sleep/wake) triggers an immediate
+ * check / reconnect.
  */
 class HaClient(
     private val config: HaConfig,
@@ -62,7 +75,9 @@ class HaClient(
     private var nextId = 0
     private val pending = mutableMapOf<Int, CompletableDeferred<Incoming.Result>>()
 
-    fun start(scope: CoroutineScope): Job = scope.launch {
+    // Runs off the UI dispatcher: Swing timers (used by delay on Dispatchers.Main) are
+    // unreliable after macOS sleep / App Nap, which could leave the retry loop stuck.
+    fun start(scope: CoroutineScope): Job = scope.launch(Dispatchers.Default) {
         var backoffMs = INITIAL_BACKOFF_MS
         while (isActive) {
             _connection.value = ConnectionState.Connecting
@@ -72,7 +87,10 @@ class HaClient(
                     runSession(this) { backoffMs = INITIAL_BACKOFF_MS }
                 }
             } catch (e: CancellationException) {
-                throw e
+                // Only a real cancellation of the client stops the loop - a timeout
+                // (TimeoutCancellationException) or engine-internal cancellation just retries.
+                ensureActive()
+                reason = if (e is kotlinx.coroutines.TimeoutCancellationException) "Timed out" else e.message
             } catch (e: AuthRejected) {
                 _connection.value = ConnectionState.AuthFailed(e.message ?: "Authentication failed")
                 return@launch
@@ -82,9 +100,50 @@ class HaClient(
                 closeSession()
             }
 
-            _connection.value = ConnectionState.Disconnected(reason, (backoffMs / 1000).toInt())
-            delay(backoffMs)
-            backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+            val woke = waitBeforeRetry(backoffMs, reason)
+            backoffMs = if (woke) INITIAL_BACKOFF_MS else (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+        }
+    }
+
+    /**
+     * Waits [backoffMs] showing a countdown. Returns early (true) if the machine
+     * appears to have slept, so we reconnect straight after wake.
+     */
+    private suspend fun waitBeforeRetry(backoffMs: Long, reason: String?): Boolean {
+        val wake = WakeDetector()
+        val seconds = (backoffMs / 1000).toInt().coerceAtLeast(1)
+        for (remaining in seconds downTo 1) {
+            _connection.value = ConnectionState.Disconnected(reason, remaining)
+            delay(TICK)
+            if (wake.check()) return true
+        }
+        return false
+    }
+
+    /** Pings HA periodically (and right after wake); throws if a ping goes unanswered. */
+    private suspend fun heartbeat() {
+        val wake = WakeDetector()
+        var lastPing = TimeSource.Monotonic.markNow()
+        while (true) {
+            delay(TICK)
+            val woke = wake.check()
+            if (woke || lastPing.elapsedNow() >= HEARTBEAT_INTERVAL) {
+                val pong = request(Outgoing::ping)
+                if (!pong.success) throw HaException("Ping failed")
+                lastPing = TimeSource.Monotonic.markNow()
+            }
+        }
+    }
+
+    /** Detects sleep by the wall clock advancing much more than expected between ticks. */
+    private class WakeDetector {
+        private var last: Instant = Clock.System.now()
+
+        fun check(): Boolean {
+            val now = Clock.System.now()
+            val gap = now - last
+            last = now
+            return gap > TICK + WAKE_THRESHOLD || gap.isNegative()
         }
     }
 
@@ -135,7 +194,18 @@ class HaClient(
         _connection.value = ConnectionState.Connected
         onConnected()
 
-        reader.join()
+        try {
+            coroutineScope {
+                val heartbeat = launch { heartbeat() }
+                reader.join()
+                heartbeat.cancel()
+            }
+        } catch (e: HaException) {
+            // Connection is dead: tear it down without waiting on a graceful close.
+            reader.cancel()
+            ws.cancel()
+            throw e
+        }
     }
 
     private suspend fun authenticate(ws: DefaultClientWebSocketSession) {
@@ -187,7 +257,8 @@ class HaClient(
             id
         }
         return try {
-            withTimeout(REQUEST_TIMEOUT) { deferred.await() }
+            withTimeoutOrNull(REQUEST_TIMEOUT) { deferred.await() }
+                ?: throw HaException("Timed out waiting for Home Assistant")
         } finally {
             pendingLock.withLock { pending.remove(id) }
         }
@@ -203,5 +274,8 @@ class HaClient(
         private const val INITIAL_BACKOFF_MS = 1_000L
         private const val MAX_BACKOFF_MS = 30_000L
         private val REQUEST_TIMEOUT = 10.seconds
+        private val HEARTBEAT_INTERVAL = 30.seconds
+        private val TICK = 1.seconds
+        private val WAKE_THRESHOLD: Duration = 5.seconds
     }
 }

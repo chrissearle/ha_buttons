@@ -57,6 +57,12 @@ object Outgoing {
         put("event_type", "state_changed")
     }
 
+    /** HA replies with `{"id": n, "type": "pong"}`. */
+    fun ping(id: Int): JsonObject = buildJsonObject {
+        put("id", id)
+        put("type", "ping")
+    }
+
     fun callService(
         id: Int,
         domain: String,
@@ -95,6 +101,13 @@ private fun parseMessage(obj: JsonObject): Incoming = when (val type = obj.strin
         success = obj["success"]?.jsonPrimitive?.booleanOrNull ?: false,
         result = obj["result"],
         errorMessage = (obj["error"] as? JsonObject)?.string("message"),
+    )
+
+    "pong" -> Incoming.Result(
+        id = obj["id"]?.jsonPrimitive?.intOrNull ?: -1,
+        success = true,
+        result = null,
+        errorMessage = null,
     )
 
     "event" -> parseEvent(obj) ?: Incoming.Other(type)
