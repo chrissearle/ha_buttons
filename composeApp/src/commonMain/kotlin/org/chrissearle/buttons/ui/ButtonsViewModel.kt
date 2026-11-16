@@ -1,6 +1,8 @@
 package org.chrissearle.buttons.ui
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -53,8 +55,28 @@ class ButtonsViewModel(
             buttons.mapIndexed { i, b -> b.toUiState(i, emptyMap(), connected = false, flash = null) },
         )
 
+    private var connectJob: Job? = null
+
     fun start() {
-        client.start(scope)
+        connectJob = client.start(scope)
+    }
+
+    /** Connects now - skipping any retry countdown - or after a manual disconnect / auth failure. */
+    fun connect() = restart(connectAfter = true)
+
+    /** Same as [connect], but drops any live connection first. */
+    fun reconnect() = restart(connectAfter = true)
+
+    fun disconnect() = restart(connectAfter = false)
+
+    private fun restart(connectAfter: Boolean) {
+        val previous = connectJob
+        scope.launch {
+            // Wait for the old loop to finish so it can't overwrite the state we set next.
+            previous?.cancelAndJoin()
+            _message.value = null
+            if (connectAfter) start() else client.markStopped()
+        }
     }
 
     fun onClick(index: Int) {

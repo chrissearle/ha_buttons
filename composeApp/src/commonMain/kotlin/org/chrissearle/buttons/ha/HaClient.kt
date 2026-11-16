@@ -22,6 +22,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -37,6 +39,9 @@ import kotlin.time.TimeSource
 sealed interface ConnectionState {
     data object Connecting : ConnectionState
     data object Connected : ConnectionState
+
+    /** The user disconnected manually; nothing is retried until they connect again. */
+    data object Stopped : ConnectionState
     data class Disconnected(val reason: String?, val retryInSeconds: Int) : ConnectionState
 
     /** Authentication was rejected - retrying will not help until the config is fixed. */
@@ -145,6 +150,11 @@ class HaClient(
             last = now
             return gap > TICK + WAKE_THRESHOLD || gap.isNegative()
         }
+    }
+
+    /** Marks the connection as manually stopped. Call only once the connect loop has finished. */
+    fun markStopped() {
+        _connection.value = ConnectionState.Stopped
     }
 
     /** Toggles any toggleable entity (light, input_boolean, switch, ...). */
@@ -264,7 +274,8 @@ class HaClient(
         }
     }
 
-    private suspend fun closeSession() {
+    // NonCancellable: must still clean up when the connect loop is cancelled (manual reconnect).
+    private suspend fun closeSession() = withContext(NonCancellable) {
         lock.withLock { session = null }
         val waiting = pendingLock.withLock { pending.values.toList().also { pending.clear() } }
         waiting.forEach { it.completeExceptionally(HaException("Connection lost")) }

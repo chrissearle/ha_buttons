@@ -1,5 +1,11 @@
 package org.chrissearle.buttons
 
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.window.MenuBar
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import org.chrissearle.buttons.ha.ConnectionState
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.DpSize
@@ -48,11 +54,15 @@ private fun setDockIcon(image: BufferedImage) {
     }
 }
 
+private val isMac = System.getProperty("os.name").orEmpty().startsWith("Mac")
+
 fun main(args: Array<String>) {
     val file = resolveConfigPath(args)
     val loaded = loadConfig(file)
     val iconImage = loadAppIcon()?.also(::setDockIcon)
     val icon = iconImage?.let { BitmapPainter(it.toComposeImageBitmap()) }
+
+    val control = ConnectionControl()
 
     application {
         val size = loaded.getOrNull()?.let { windowSizeFor(it.config) } ?: DpSize(520.dp, 320.dp)
@@ -62,8 +72,22 @@ fun main(args: Array<String>) {
             icon = icon,
             state = rememberWindowState(size = size),
         ) {
+            val state by control.state.collectAsState()
+            val live = state is ConnectionState.Connected || state is ConnectionState.Connecting
+            val canConnect = state != null && !live
+            MenuBar {
+                Menu("Connection") {
+                    Item("Connect", enabled = canConnect) { control.commands.tryEmit(ConnectionCommand.Connect) }
+                    Item("Disconnect", enabled = live) { control.commands.tryEmit(ConnectionCommand.Disconnect) }
+                    Item(
+                        "Reconnect",
+                        enabled = live,
+                        shortcut = KeyShortcut(Key.R, meta = isMac, ctrl = !isMac),
+                    ) { control.commands.tryEmit(ConnectionCommand.Reconnect) }
+                }
+            }
             loaded.fold(
-                onSuccess = { App(it.config) { createHttpClient(it.trustManager) } },
+                onSuccess = { App(it.config, control) { createHttpClient(it.trustManager) } },
                 onFailure = { ConfigErrorScreen(file.absolutePath, it.message ?: it.toString()) },
             )
         }

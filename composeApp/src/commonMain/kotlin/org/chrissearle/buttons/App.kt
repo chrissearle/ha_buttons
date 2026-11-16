@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -29,11 +30,24 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import org.chrissearle.buttons.config.AppConfig
 import org.chrissearle.buttons.ha.ConnectionState
 import org.chrissearle.buttons.ha.HaClient
 import org.chrissearle.buttons.ui.ButtonGrid
 import org.chrissearle.buttons.ui.ButtonsViewModel
+
+enum class ConnectionCommand { Connect, Disconnect, Reconnect }
+
+/** Bridge between the window's menu bar and the [App]'s connection. */
+class ConnectionControl {
+    val commands = MutableSharedFlow<ConnectionCommand>(extraBufferCapacity = 1)
+
+    /** Null until the app has loaded (e.g. config error). */
+    val state = MutableStateFlow<ConnectionState?>(null)
+}
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
@@ -45,7 +59,7 @@ fun AppTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun App(config: AppConfig, createHttpClient: () -> HttpClient) {
+fun App(config: AppConfig, control: ConnectionControl, createHttpClient: () -> HttpClient) {
     val viewModel = remember(config) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val http = createHttpClient()
@@ -67,6 +81,16 @@ fun App(config: AppConfig, createHttpClient: () -> HttpClient) {
     }
 
     val vm = viewModel.first
+    LaunchedEffect(vm) {
+        launch { vm.connection.collect { control.state.value = it } }
+        control.commands.collect {
+            when (it) {
+                ConnectionCommand.Connect -> vm.connect()
+                ConnectionCommand.Disconnect -> vm.disconnect()
+                ConnectionCommand.Reconnect -> vm.reconnect()
+            }
+        }
+    }
     val buttons by vm.uiState.collectAsState()
     val connection by vm.connection.collectAsState()
     val message by vm.message.collectAsState()
@@ -89,6 +113,7 @@ private fun StatusBar(connection: ConnectionState, message: String?) {
     val (dot, text) = when (connection) {
         ConnectionState.Connecting -> Color(0xFFFFB300) to "Connecting…"
         ConnectionState.Connected -> Color(0xFF43A047) to "Connected"
+        ConnectionState.Stopped -> Color(0xFF9E9E9E) to "Disconnected"
         is ConnectionState.Disconnected ->
             Color(0xFFE53935) to "Disconnected (${connection.reason}) – retrying in ${connection.retryInSeconds}s"
 
